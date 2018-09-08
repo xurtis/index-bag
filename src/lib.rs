@@ -2,8 +2,11 @@
 
 #![no_std]
 #![feature(alloc)]
+#![feature(test)]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate test;
 
 use alloc::prelude::*;
 use core::num::NonZeroUsize;
@@ -13,13 +16,13 @@ use core::iter::Iterator;
 const USIZE_BITS: u8 = (size_of::<usize>() * 8) as u8;
 
 /// The bag of values.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IndexBag<T> {
     data: Node<T>,
     pool_size: usize,
 }
 
-impl<T> IndexBag<T> {
+impl<T: ::core::fmt::Debug> IndexBag<T> {
     pub fn new() -> IndexBag<T> {
         IndexBag {
             data: Node::Leaf,
@@ -41,6 +44,7 @@ impl<T> IndexBag<T> {
 
         let inserted_index = index.index.get();
         if inserted_index > self.pool_size {
+            debug_assert!(inserted_index == self.pool_size + 1);
             self.pool_size = inserted_index;
         }
 
@@ -63,7 +67,7 @@ impl<T> IndexBag<T> {
             .and_then(|node| node.value_mut())
     }
 
-    pub fn get_index(&mut self, index: usize) -> Option<Index> {
+    pub fn get_index(&self, index: usize) -> Option<Index> {
         let non_zero_index = NonZeroUsize::new(index)?;
         self.data.get(Path::new(index))
             .and_then(Node::generation)
@@ -97,7 +101,7 @@ impl Index {
     }
 
     fn push_right(mut self) -> Index {
-        let index = (self.index.get() << 1) & 1;
+        let index = (self.index.get() << 1) | 1;
         self.index = NonZeroUsize::new(index).unwrap();
         self
     }
@@ -110,6 +114,7 @@ impl Into<usize> for Index {
 }
 
 /// The path to take to get to an index.
+#[derive(Debug)]
 struct Path {
     depth: u8,
     path: usize,
@@ -150,13 +155,14 @@ impl Iterator for Path {
 }
 
 /// The steps to take on the path.
+#[derive(Debug)]
 enum Step {
     Left,
     Right,
 }
 
 /// The tree which tracks the used indexes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Node<T> {
     Index {
         value: Option<T>,
@@ -168,7 +174,117 @@ enum Node<T> {
     Leaf,
 }
 
-impl<T> Node<T> {
+#[bench]
+fn node_create(b: &mut test::Bencher) {
+    b.iter(|| Node::new(10u16));
+}
+
+#[bench]
+fn node_insert(b: &mut test::Bencher) {
+    b.iter(|| {
+        let mut node = Node::new(10u16);
+        node.remove(Path::new(1));
+        node.insert(11u16, Path::new(1))
+    });
+}
+
+#[bench]
+fn node_insert_3(b: &mut test::Bencher) {
+    b.iter(|| {
+        let mut node = Node::new(10u16);
+        node.remove(Path::new(1));
+        node.insert(11u16, Path::new(1));
+        node.insert(12u16, Path::new(2));
+        node.insert(13u16, Path::new(3));
+    });
+}
+
+#[bench]
+fn node_insert_100(b: &mut test::Bencher) {
+    b.iter(|| {
+        let mut node = Node::Leaf;
+        (0..100)
+            .map(move |i| node.insert(i, Path::new(i + 1)))
+            .count()
+    })
+}
+
+#[bench]
+fn node_create_100(b: &mut test::Bencher) {
+    b.iter(|| {
+        (0..100)
+            .map(move |i| Node::new(i))
+            .count()
+    })
+}
+#[bench]
+fn struct_100(b: &mut test::Bencher) {
+    b.iter(|| {
+        (0..100)
+            .map(move |i| Node::Index {
+                value: Some(i),
+                generation: 0,
+                vacant_children: 0,
+                left: Box::new(Node::Leaf),
+                right: Box::new(Node::Leaf),
+            })
+            .count()
+    })
+}
+
+#[bench]
+fn node_recreate_100(b: &mut test::Bencher) {
+    let mut node = Node::Leaf;
+    for i in 0..100 {
+        node.insert(i + 1, Path::new(i + 1));
+    }
+    for i in 0..100 {
+        assert_eq!(node.remove(Path::new(i + 1)).unwrap(), i + 1);
+    }
+    b.iter(|| {
+        let mut node = node.clone();
+        for i in 0..100 {
+            node.insert(i + 1, Path::new(i + 1));
+        }
+    })
+}
+
+#[bench]
+fn node_swap_100(b: &mut test::Bencher) {
+    let mut node = Node::Leaf;
+    for i in 0..100 {
+        node.insert(i + 1, Path::new(i + 1));
+    }
+    for i in 0..100 {
+        let mut node = node.get_mut(Path::new(i + 1)).unwrap();
+        assert_eq!(node.value().cloned().unwrap(), i + 1);
+        if let Node::Index { value, .. } = node {
+            *value = None;
+        }
+    }
+    b.iter(|| {
+        for i in 0..100 {
+            let mut node = node.get_mut(Path::new(i + 1)).unwrap();
+            if let Node::Index { value, .. } = node {
+                *value = Some(i + 1);
+            }
+        }
+    })
+}
+
+#[bench]
+fn node_lookup_3(b: &mut test::Bencher) {
+    let mut node = Node::new(10u16);
+    node.insert(12u16, Path::new(2));
+    node.insert(13u16, Path::new(3));
+    b.iter(move || {
+        assert_eq!(node.get(Path::new(1)).unwrap().value().unwrap(), &10);
+        assert_eq!(node.get(Path::new(2)).unwrap().value().unwrap(), &12);
+        assert_eq!(node.get(Path::new(3)).unwrap().value().unwrap(), &13);
+    });
+}
+
+impl<T: ::core::fmt::Debug> Node<T> {
     fn new(value: T) -> Node<T> {
         use Node::*;
         Index {
@@ -274,8 +390,9 @@ impl<T> Node<T> {
 
     fn remove_value(&mut self) -> Option<T> {
         let mut inner = None;
-        if let Node::Index { value, .. } = self {
-             swap(value, &mut inner);
+        if let Node::Index { value, vacant_children, .. } = self {
+            *vacant_children += 1;
+            swap(value, &mut inner);
         }
         inner
     }
@@ -287,8 +404,9 @@ impl<T> Node<T> {
                 *leaf = Node::new(inner);
                 Index::new(0)
             },
-            (Node::Index { value, generation, .. }, _) if value.is_none() => {
+            (Node::Index { value: value @ None, generation, vacant_children, .. }, _) => {
                 *value = Some(inner);
+                *vacant_children -= 1;
                 *generation += 1;
                 Index::new(*generation)
             }
@@ -310,7 +428,7 @@ impl<T> Node<T> {
             (Node::Index { right, .. }, Some(Right)) => {
                 right.insert(inner, path).push_right()
             }
-            _ => unreachable!("Invalid append path"),
+            (node, step) => unreachable!("Invalid append path: {:?} on {:#?}", step, node),
         }
     }
 }

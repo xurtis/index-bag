@@ -3,4 +3,14 @@ name = "index-bag"
 version = "0.1.0"
 authors = ["Curtis Millar <curtis@curtism.me>"]
 
-[dependencies]
+[dev-dependencies]
+rand = "0.5.5"
+rustc-test = "0.3.0"
+
+[[example]]
+name = "rapid"
+path = "example/rapid.rs"
+
+[[bench]]
+name = "rapid"
+path = "example/rapid.rs"
