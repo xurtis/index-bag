@@ -7,6 +7,7 @@ extern crate test;
 extern crate rand;
 extern crate index_bag;
 
+#[cfg(test)]
 use test::Bencher;
 use rand::*;
 use rand::prng::XorShiftRng;

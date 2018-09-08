@@ -1,5 +1,22 @@
 //! An bag of objects accessed with a unique index.
-
+//!
+//! [`IndexBag`] provides a mechanism for storing items and retrieving them again later. The
+//!
+//! The [`Index`] can be copied safetly, providing multiple references to the same object without
+//! requiring ownership. The [`Index`] is also generational, meaning that if an [`Index`] is held
+//! to an object in the bag, but that object is removed and another added in its place, the
+//! [`Index`] referring to the original item will fail to resolve to the replacement item (rather
+//! than erroneously referring to the new item placed at the same location in the [`IndexBag`]).
+//!
+//! ```rust
+//! use index_bag::IndexBag;
+//!
+//! let mut bag = IndexBag::new();
+//! let index = bag.insert(12);
+//! assert_eq!(bag.get(index).unwrap(), &12);
+//! assert_eq!(bag.remove(index), Some(12));
+//! assert_eq!(bag.remove(index), None);
+//! ```
 #![no_std]
 #![feature(alloc)]
 #![feature(test)]
@@ -16,6 +33,16 @@ use core::iter::Iterator;
 const USIZE_BITS: u8 = (size_of::<usize>() * 8) as u8;
 
 /// The bag of values.
+///
+/// ```rust
+/// use index_bag::IndexBag;
+///
+/// let mut bag = IndexBag::new();
+/// let index = bag.insert(12);
+/// assert_eq!(bag.get(index).unwrap(), &12);
+/// assert_eq!(bag.remove(index), Some(12));
+/// assert_eq!(bag.remove(index), None);
+/// ```
 #[derive(Debug, Clone)]
 pub struct IndexBag<T> {
     data: Node<T>,
@@ -23,6 +50,7 @@ pub struct IndexBag<T> {
 }
 
 impl<T: ::core::fmt::Debug> IndexBag<T> {
+    /// Create an empty bag.
     pub fn new() -> IndexBag<T> {
         IndexBag {
             data: Node::Leaf,
@@ -30,14 +58,19 @@ impl<T: ::core::fmt::Debug> IndexBag<T> {
         }
     }
 
+    /// The current size of the bag.
+    ///
+    /// The bag expands only when it has no available unused indexes.
     pub fn pool_size(&self) -> usize {
         self.pool_size
     }
 
+    /// The number of allocated but unused indexes in the bag.
     pub fn unused_indexes(&self) -> usize {
         self.data.vacant_children()
     }
 
+    /// Insert an item into the bag.
     pub fn insert(&mut self, value: T) -> Index {
         let append_path = Path::new(self.pool_size + 1);
         let index = self.data.insert(value, append_path);
@@ -51,22 +84,46 @@ impl<T: ::core::fmt::Debug> IndexBag<T> {
         index
     }
 
+    /// Remove an item from the bag.
     pub fn remove(&mut self, index: Index) -> Option<T> {
         self.data.remove(index.path())
     }
 
+    /// Get a reference to an item in the bag.
     pub fn get(&self, index: Index) -> Option<&T> {
         self.data.get(index.path())
             .and_then(|node| node.matches(index))
             .and_then(|node| node.value())
     }
 
+    /// Get a mutable reference to an item in the bag.
     pub fn get_mut(&mut self, index: Index) -> Option<&mut T> {
         self.data.get_mut(index.path())
             .and_then(|node| node.matches_mut(index))
             .and_then(|node| node.value_mut())
     }
 
+    /// Translate a [`usize`] index to an [`Index`].
+    ///
+    /// The generated [`Index`] will refer to the item in the bag that currently resides at a given
+    /// numeric index.
+    ///
+    /// ```rust
+    /// use index_bag::IndexBag;
+    /// let mut bag = IndexBag::new();
+    ///
+    /// let index = bag.insert(12);
+    /// let i_index: usize = index.into();
+    /// let current_index = bag.get_index(i_index).unwrap();
+    /// assert_eq!(index, current_index);
+    /// assert_eq!(bag.remove(current_index), Some(12));
+    ///
+    /// // Note that usize indexes do not prevent access to incorrect data.
+    /// let new_index = bag.insert(13);
+    /// let current_index = bag.get_index(i_index).unwrap();
+    /// assert_eq!(new_index, current_index);
+    /// assert_eq!(bag.remove(current_index), Some(13));
+    /// ```
     pub fn get_index(&self, index: usize) -> Option<Index> {
         let non_zero_index = NonZeroUsize::new(index)?;
         self.data.get(Path::new(index))
@@ -76,7 +133,7 @@ impl<T: ::core::fmt::Debug> IndexBag<T> {
 }
 
 /// An index into an IndexBag.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Index {
     index: NonZeroUsize,
     generation: usize,
