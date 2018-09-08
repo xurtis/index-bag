@@ -62,6 +62,13 @@ impl<T> IndexBag<T> {
             .and_then(|node| node.matches_mut(index))
             .and_then(|node| node.value_mut())
     }
+
+    pub fn get_index(&mut self, index: usize) -> Option<Index> {
+        let non_zero_index = NonZeroUsize::new(index)?;
+        self.data.get(Path::new(index))
+            .and_then(Node::generation)
+            .map(|generation| Index { index: non_zero_index, generation })
+    }
 }
 
 /// An index into an IndexBag.
@@ -93,6 +100,12 @@ impl Index {
         let index = (self.index.get() << 1) & 1;
         self.index = NonZeroUsize::new(index).unwrap();
         self
+    }
+}
+
+impl Into<usize> for Index {
+    fn into(self) -> usize {
+        self.index.get()
     }
 }
 
@@ -172,6 +185,14 @@ impl<T> Node<T> {
         match self {
             Index { vacant_children, .. } => *vacant_children,
             Leaf => 0,
+        }
+    }
+
+    fn generation(&self) -> Option<usize> {
+        use Node::*;
+        match self {
+            Index { generation, .. } => Some(*generation),
+            Leaf => None,
         }
     }
 
